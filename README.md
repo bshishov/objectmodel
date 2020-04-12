@@ -4,15 +4,15 @@ Python typed object model for schema creation and validation
 
 # Examples
 ```lang=python
-from datetime import datetime
 from typing import List, Optional, Any
+import time
 
 from objectmodel import *
 
 
 class User(ObjectModel):
     name: str = Field(required=True)
-    created: datetime = Field(default=datetime.now)
+    created: float = Field(default=time.time)
     friends: List['User'] = ListCollectionField(item_model='User', default=list, required=False)
     any_object: Optional[Any] = Field(required=False, allow_none=True)
 
