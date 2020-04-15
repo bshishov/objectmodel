@@ -9,7 +9,9 @@ Objects populated by ObjectModel class guarantee to match the desired state and 
 # Installation
 
 This library is still in a development state, so please dont use it right away - the API might change at any time
-`pip install -i https://test.pypi.org/simple/ objectmodel`
+```
+pip install -i https://test.pypi.org/simple/ objectmodel
+```
 
 
 # TODO
