@@ -1,11 +1,9 @@
-import json
 import sys
 
-from typing import Any, List, Dict, TypeVar, Generic, Type, Union, Protocol
+from typing import Any, List, Dict, TypeVar, Type, Union
 
 __all__ = ['Field', 'ObjectField', 'ListCollectionField', 'DictCollectionField',
-           'DuplicateFieldDefinition', 'ObjectModelMeta', 'ObjectModel', 'JsonSerializableModel',
-           'ProxyField']
+           'DuplicateFieldDefinition', 'ObjectModelMeta', 'ObjectModel', 'ProxyField']
 
 
 class _NotProvided:
@@ -311,17 +309,3 @@ class ObjectModel(metaclass=ObjectModelMeta):
 
     def __getstate__(self) -> Dict[str, Any]:
         return self.serialize()
-
-
-class JsonSerializableModel(ObjectModel):
-    def to_json(self) -> str:
-        data = self.serialize()
-        return json.dumps(data)
-
-    def from_json(self, raw: str):
-        data = json.loads(raw)
-        self.deserialize(data)
-
-    def from_json_file(self, file):
-        data = json.load(file)
-        self.deserialize(data)
