@@ -33,7 +33,7 @@ class ObjectTests(unittest.TestCase):
 
     def test_set_field(self):
         class A(ObjectModel):
-            foo = Field()
+            foo = Field(required=False)
 
         instance = A()
         value = object()
@@ -96,3 +96,10 @@ class ObjectTests(unittest.TestCase):
         obj = A(foo=42, bar='hello')
         assert obj.foo == 42
         assert obj.bar == 'hello'
+
+    def test_not_filled_required_field_raises(self):
+        class A(ObjectModel):
+            foo = Field(required=True)
+
+        with self.assertRaises(FieldValueRequiredError):
+            A()

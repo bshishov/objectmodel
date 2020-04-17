@@ -1,10 +1,17 @@
-from typing import Any
+from __future__ import annotations
 
-from objectmodel.model import ObjectModel, Field
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from objectmodel.model import ObjectModel, Field
+    from objectmodel.errors import FieldValidationError
+
+
+Validator = Callable[[ObjectModel, Field, Any], None]
 
 
 class FieldValidator:
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         raise NotImplementedError()
 
 
@@ -13,19 +20,16 @@ class OfType(FieldValidator):
         self.typ = typ
         self.can_be_null = allow_none
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         if value is None:
             return self.can_be_null
         return isinstance(value, self.typ)
 
 
 class NotEmptyString(FieldValidator):
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
-        if not isinstance(value, str):
-            return False
-        if not value:
-            return False
-        return True
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
+        if not isinstance(value, str) or not value:
+            raise FieldValidationError(instance, field, value, 'Value should be a not-empty string')
 
 
 class Numeric(FieldValidator):
@@ -33,7 +37,7 @@ class Numeric(FieldValidator):
         self.allow_float = allow_float
         self.allow_none = allow_none
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         if value is None:
             return self.allow_none
         if isinstance(value, float) and not self.allow_float:
@@ -42,10 +46,8 @@ class Numeric(FieldValidator):
 
 
 class PositiveNumeric(Numeric):
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
-        is_valid_numeric = super().validate(instance, field, value)
-        if not is_valid_numeric:
-            return False
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
+        super()(instance, field, value)
         return value >= 0
 
 
@@ -53,7 +55,7 @@ class MoreThanOrEqual(FieldValidator):
     def __init__(self, n):
         self.n = n
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         return value >= self.n
 
 
@@ -61,7 +63,7 @@ class ItemsOfType(FieldValidator):
     def __init__(self, typ):
         self.typ = typ
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         for item in value:
             if not isinstance(item, self.typ):
                 return False
@@ -69,19 +71,18 @@ class ItemsOfType(FieldValidator):
 
 
 class ValidItems(FieldValidator):
-    def __init__(self, *item_validators: FieldValidator):
+    def __init__(self, *item_validators: Validator):
         self.item_validators = item_validators
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         for i, item in enumerate(value):
             for validator in self.item_validators:
-                if not validator.validate(instance, field, item):
-                    return False
+                validator(instance, field, item)
         return True
 
 
 class NotEmptyList(FieldValidator):
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         if not isinstance(value, list):
             return False
         return len(value) > 0
@@ -91,7 +92,7 @@ class MaxLen(FieldValidator):
     def __init__(self, max_len: int):
         self.max_len = max_len
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         return len(value) <= self.max_len
 
 
@@ -99,11 +100,9 @@ class ChainValidator(FieldValidator):
     def __init__(self, *validators: FieldValidator):
         self.validators = validators
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         for v in self.validators:
-            if not v.validate(instance, field, value):
-                return False
-        return True
+            v(instance, field, value)
 
 
 class ValueIn(FieldValidator):
@@ -112,7 +111,7 @@ class ValueIn(FieldValidator):
             args = args[0]
         self.options = set(args)
 
-    def validate(self, instance: ObjectModel, field: Field, value: Any) -> bool:
+    def __call__(self, instance: ObjectModel, field: Field, value: Any):
         return value in self.options
 
 

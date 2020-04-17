@@ -1,3 +1,8 @@
+from objectmodel.errors import (
+    FieldValidationError,
+    DuplicateFieldDefinitionError,
+    FieldValueRequiredError
+)
 from objectmodel.model import (
     ObjectModel,
     Field,
@@ -14,5 +19,8 @@ __all__ = [
     'Field',
     'ListCollectionField',
     'DictCollectionField',
-    'ProxyField'
+    'ProxyField',
+    'FieldValidationError',
+    'DuplicateFieldDefinitionError',
+    'FieldValueRequiredError'
 ]

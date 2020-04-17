@@ -1,9 +1,10 @@
 import sys
 
-from typing import Any, List, Dict, TypeVar, Type, Union
+from typing import Any, List, Dict, TypeVar, Type, Union, Optional, Callable
+from objectmodel.errors import *
 
 __all__ = ['Field', 'ObjectField', 'ListCollectionField', 'DictCollectionField',
-           'DuplicateFieldDefinition', 'ObjectModelMeta', 'ObjectModel', 'ProxyField']
+           'ObjectModelMeta', 'ObjectModel', 'ProxyField']
 
 
 class _NotProvided:
@@ -30,18 +31,19 @@ class Field:
 
     def __init__(self,
                  name: str = NOT_PROVIDED,
-                 default: _T = NOT_PROVIDED,
+                 default: Union[Callable[[], _T], _T] = NOT_PROVIDED,
                  required: bool = False,
                  allow_none: bool = False,
-                 validator=None):
+                 validator: Optional[Callable[[Optional['ObjectModel'], 'Field', Any], None]] = None):
         self.name = name
         self.default = default
         self.required = required
         self.allow_none = allow_none
         self.validator = validator
-        if self.default is None and not self.allow_none:
-            raise RuntimeError(f'Default is None but None is not allowed for '
-                               f'field \'{self.name}\'. Check field settings')
+
+        # Defaults also should be validated!
+        if not callable(default):
+            self.validate(None, default)
 
     def __get__(self, model_instance: 'ObjectModel', owner: Type['ObjectModel']) -> _T:
         assert isinstance(model_instance, ObjectModel)
@@ -54,13 +56,11 @@ class Field:
                     default = default()
                 self.__set__(model_instance, default)
                 return default
-        raise AttributeError(f'Field \'{self.name}\' of model \'{owner.__name__}\' is not set')
+        raise FieldValueRequiredError(model_instance, self)
 
     def __set__(self, model_instance: 'ObjectModel', value: _T):
         assert isinstance(model_instance, ObjectModel)
-        if value is None and not self.allow_none:
-            raise AttributeError(f'Field \'{self.name}\' of model '
-                                 f'\'{model_instance.__class__.__name__}\' cannot be None')
+        self.validate(model_instance, value)
         model_instance.__state__[self.name] = value
 
     def __set_name__(self, owner, name):
@@ -70,6 +70,8 @@ class Field:
 
     def __delete__(self, model_instance):
         assert isinstance(model_instance, ObjectModel)
+        if self.required:
+            raise FieldValueRequiredError(model_instance, self)
         del model_instance.__state__[self.name]
 
     def serialize(self, model_instance: 'ObjectModel') -> Any:
@@ -84,23 +86,30 @@ class Field:
     def has_value(self, model_instance: 'ObjectModel'):
         return self.name in model_instance.__state__
 
-    def validate(self, model_instance: 'ObjectModel', raise_on_error=False) -> bool:
+    def can_provide_value(self, model_instance: 'ObjectModel'):
+        return self.default is not NOT_PROVIDED or self.name in model_instance.__state__
+
+    def validate(self, model_instance: Optional['ObjectModel'], value: _T):
+        if value is None and not self.allow_none:
+            raise FieldValidationError(model_instance, self, value,
+                                       'Cannot be None (allow_none=False)')
         if self.validator:
             value = self.__get__(model_instance, model_instance.__class__)
-            if not self.validator.validate(model_instance, self, value):
-                if raise_on_error:
-                    raise AttributeError(
-                        f'Field {self.name} of model {model_instance.__class__.__name__} '
-                        f'is not valid. Validator: {self.validator.__class__.__name__}. '
-                        f'Got value: {value}')
-                return False
-        return True
+            self.validator(model_instance, self, value)
 
     def clear(self, model_instance):
         self.__delete__(model_instance)
 
     def __repr__(self):
-        return f'<Field(name={self.name})>'
+        return '{}(name={!r}, default={!r}, required={!r}, allow_none={!r}, validator={!r})'\
+            .format(
+                self.__class__.__name__,
+                self.name,
+                self.default,
+                self.required,
+                self.allow_none,
+                self.validator
+            )
 
 
 class ProxyField(Field):
@@ -111,7 +120,7 @@ class ProxyField(Field):
     def __get__(self, instance, owner):
         return getattr(instance, self._attr_name)
 
-    def has_value(self, model_instance: 'ObjectModel'):
+    def has_value(self, model_instance: 'ObjectModel') -> bool:
         return True
 
 
@@ -135,12 +144,12 @@ class ObjectField(Field):
             obj.deserialize(value)
             super().deserialize(instance, obj)
 
-    def validate(self, model_instance: 'ObjectModel', raise_on_error=False) -> bool:
-        base_validation_result = super().validate(model_instance, raise_on_error)
-        if not base_validation_result:
-            return base_validation_result
-        value: ObjectModel = self.__get__(model_instance, model_instance.__class__)
-        return value.validate(raise_on_error)
+    def validate(self, model_instance: 'ObjectModel', value):
+        super().validate(model_instance, value)
+        if not self.allow_none and value is not None:
+            if not isinstance(value, ObjectModel):
+                raise FieldValidationError(model_instance, self, value, f'Value should be of type: \'ObjectModel\'')
+            value.validate()
 
 
 class ListCollectionField(Field):
@@ -156,8 +165,9 @@ class ListCollectionField(Field):
 
     def deserialize(self, instance: 'ObjectModel', value):
         deserialized_list = []
+        item_cls = self._resolve_item_type()
         for v in value:
-            obj = self._resolve_item_type()()
+            obj = item_cls()
             obj.deserialize(v)
             deserialized_list.append(obj)
         super().deserialize(instance, deserialized_list)
@@ -168,18 +178,20 @@ class ListCollectionField(Field):
         elif isinstance(self._model, str):
             self._model = getattr(sys.modules[__name__], self._model)
             return self._model
-        else:
-            raise TypeError(f'Cant resolve model type: {self._model}')
+        raise TypeError(f'Cant resolve item model type: {self._model}')
 
-    def validate(self, model_instance: 'ObjectModel', raise_on_error=False) -> bool:
-        base_validation_result = super().validate(model_instance, raise_on_error)
-        if not base_validation_result:
-            return base_validation_result
-        value: List[ObjectModel] = self.__get__(model_instance, model_instance.__class__)
-        for item in value:
-            if not item.validate(raise_on_error):
-                return False
-        return True
+    def validate(self, model_instance: 'ObjectModel', value):
+        super().validate(model_instance, value)
+        if not self.allow_none and value is not None:
+            if not isinstance(value, list):
+                raise FieldValidationError(model_instance, self, value,
+                                           'Value should be of type: List[ObjectModel]')
+            for item in value:
+                if not isinstance(item, ObjectModel):
+                    raise FieldValidationError(model_instance, self, value,
+                                               f'List item {item!r} '
+                                               f'should be of type: \'ObjectModel\'')
+                item.validate()
 
 
 class DictCollectionField(Field):
@@ -204,21 +216,13 @@ class DictCollectionField(Field):
             deserialized_dict[k] = obj
         super().deserialize(instance, deserialized_dict)
 
-    def validate(self, model_instance: 'ObjectModel', raise_on_error=False) -> bool:
-        base_validation_result = super().validate(model_instance, raise_on_error)
-        if not base_validation_result:
-            return base_validation_result
-        value: Dict[Any, ObjectModel] = self.__get__(model_instance, model_instance.__class__)
+    def validate(self, model_instance: 'ObjectModel', value: Any):
+        super().validate(model_instance, value)
+        if not isinstance(value, dict):
+            raise FieldValidationError(model_instance, self, value,
+                                       'Value should be of type Dict[ObjectModel]')
         for item in value.values():
-            if not item.validate(raise_on_error):
-                return False
-        return True
-
-
-class DuplicateFieldDefinition(AttributeError):
-    def __init__(self, field_name, class_name):
-        super().__init__(f'Duplicate field definition found during {class_name} initialization, '
-                         f'field: {field_name}')
+            item.validate()
 
 
 def is_instance_or_subclass(val, klass) -> bool:
@@ -258,47 +262,45 @@ class ObjectModelMeta(type):
 
 
 class ObjectModel(metaclass=ObjectModelMeta):
-    __slots__ = '__state__', '_dict_factory'
+    DICT_FACTORY = dict
+
+    __slots__ = '__state__'
 
     # fields class attr is set during class construction in ObjectModelMeta.__new__
     __fields__: Dict[str, Field]
 
-    def __init__(self, dict_factory: callable = dict, **kwargs):
+    def __init__(self, **kwargs):
         self.__state__ = {}
-        self._dict_factory = dict_factory
         for attr_name, attr_value in kwargs.items():
             if attr_name not in self.__fields__:
                 raise AttributeError(f'Unexpected argument: {attr_name}, '
                                      f'no such field in model {self.__class__.__name__}')
             setattr(self, attr_name, attr_value)
 
-    def validate(self, raize=False) -> bool:
+        # TODO: Fix double validation (first one happens in the settattr)
+        self.validate()
+
+    def validate(self):
         for field in self.__fields__.values():
-            if not field.validate(self, raize):
-                return False
-        return True
+            if field.has_value(self) or field.required:
+                value = field.__get__(self, self.__class__)
+                field.validate(self, value)
 
     def deserialize(self, data: Dict[str, Any]):
         for key, value in data.items():
-            field = self.__fields__.get(key, None)
-            if field:
+            try:
+                field = self.__fields__[key]
                 field.deserialize(self, value)
+            except KeyError:
+                # We've received some additional info that does not correspond to a field
+                pass
 
     def serialize(self) -> Dict[str, Any]:
-        result = self._dict_factory()
-        for field in self.__fields__.values():
-            if field.has_default() or field.has_value(self):
-                result[field.name] = field.serialize(self)
-            else:
-                if field.required:
-                    raise KeyError(f'Field {field.name} of '
-                                   f'model {self.__class__.__name__} '
-                                   f'is required')
-        return result
-
-    # Aliases
-    to_dict = serialize
-    from_dict = deserialize
+        return self.DICT_FACTORY(
+            (field.name, field.serialize(self))
+            for field in self.__fields__.values()
+            if field.can_provide_value(self)
+        )
 
     def clear(self):
         for field in self.__fields__.values():
@@ -309,3 +311,12 @@ class ObjectModel(metaclass=ObjectModelMeta):
 
     def __getstate__(self) -> Dict[str, Any]:
         return self.serialize()
+
+    def __repr__(self):
+        return '{}({})'.format(
+            self.__class__.__name__,
+            ', '.join(
+                f'{name}={val!r}'
+                for name, val in self.__state__.items()
+            )
+        )
