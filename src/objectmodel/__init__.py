@@ -1,15 +1,18 @@
+from objectmodel.base import FieldABC, ObjectModelABC
 from objectmodel.errors import (
     FieldValidationError,
     DuplicateFieldDefinitionError,
     FieldValueRequiredError
 )
-from objectmodel.model import (
-    ObjectModel,
+
+from objectmodel.model import ObjectModel, ObjectModelMeta
+from objectmodel.fields import (
+    NOT_PROVIDED,
     Field,
-    ListCollectionField,
-    DictCollectionField,
     ProxyField,
-    NOT_PROVIDED
+    ObjectField,
+    ListCollectionField,
+    DictCollectionField
 )
 from ._version import __version__, __version_info__
 

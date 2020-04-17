@@ -1,9 +1,6 @@
-from __future__ import annotations
+from typing import Optional, Any
 
-from typing import Optional, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from objectmodel.model import ObjectModel, Field
+from objectmodel.base import ObjectModelABC, FieldABC
 
 
 __all__ = [
@@ -16,14 +13,14 @@ __all__ = [
 class FieldValidationError(AttributeError):
     """ Field validation error """
 
-    def __init__(self, instance: Optional[ObjectModel], field: Field, value: Any, message: str):
+    def __init__(self, instance: Optional[ObjectModelABC], field: FieldABC, value: Any, message: str):
         super().__init__(f'Invalid value {value} for field {field!r} of {instance!r}: {message}')
 
 
 class FieldValueRequiredError(AttributeError):
     """ Field is required but not set """
 
-    def __init__(self, instance: ObjectModel, field: Field):
+    def __init__(self, instance: ObjectModelABC, field: FieldABC):
         super().__init__(f'Field {field!r} of {instance!r} is not set')
 
 
